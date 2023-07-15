@@ -112,12 +112,74 @@ struct BB {
     std::array<std::deque<std::ostringstream>, 3> parts;
 };
 
+class TargetDetails {
+public:
+    virtual void write_default_decls(std::ostream& stream) const = 0;
+    virtual std::string annotate_func(const Def*) const { return {}; }
+
+    virtual std::string emit_intrinsic(const Def*) const { fe::unreachable(); }
+};
+
+class CPUTargetDetails : public TargetDetails {
+public:
+    void write_default_decls(std::ostream& stream) const override {
+    }
+};
+
+class GPUTargetDetails : public TargetDetails {
+public:
+    void write_default_decls(std::ostream& stream) const override {
+        stream << "declare i64 @__hipsycl_sscp_get_group_id_x() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_local_size_x() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_local_id_x() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_num_groups_x() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_group_id_y() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_local_size_y() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_local_id_y() local_unnamed_addr\n";
+        stream << "declare i64 @__hipsycl_sscp_get_num_groups_y() local_unnamed_addr\n";
+    }
+
+    std::string emit_intrinsic(const Def* def) const override {
+        if (auto local_id = match<core::local_id>(def)) {
+            auto dim = Lit::as(local_id->arg(0));
+            return std::string{"tail call i64 @__hipsycl_sscp_get_local_id_"} +
+                   (dim == 0   ? "x"
+                    : dim == 1 ? "y"
+                               : "z") +
+                   "()";
+        } else if (auto group_id = match<core::group_id>(def)) {
+            auto dim = Lit::as(group_id->arg(0));
+            return std::string{"tail call i64 @__hipsycl_sscp_get_group_id_"} +
+                   (dim == 0   ? "x"
+                    : dim == 1 ? "y"
+                               : "z") +
+                   "()";
+        } else if (auto group_size = match<core::group_size>(def)) {
+            auto dim = Lit::as(group_size->arg(0));
+            return std::string{"tail call i64 @__hipsycl_sscp_get_local_size_"} +
+                   (dim == 0   ? "x"
+                    : dim == 1 ? "y"
+                               : "z") +
+                   "()";
+        } else if (auto num_groups = match<core::num_groups>(def)) {
+            auto dim = Lit::as(num_groups->arg(0));
+            return std::string{"tail call i64 @__hipsycl_sscp_get_num_groups_"} +
+                   (dim == 0   ? "x"
+                    : dim == 1 ? "y"
+                               : "z") +
+                   "()";
+        }
+        return {};
+    }
+};
+
 class Emitter : public thorin::Emitter<std::string, std::string, BB, Emitter> {
 public:
     using Super = thorin::Emitter<std::string, std::string, BB, Emitter>;
 
-    Emitter(World& world, std::ostream& ostream)
-        : Super(world, "llvm_emitter", ostream) {}
+    Emitter(World& world, TargetDetails& target, std::ostream& ostream)
+        : Super(world, "llvm_emitter", ostream)
+        , target_(target) {}
 
     bool is_valid(std::string_view s) { return !s.empty(); }
     void start() override;
@@ -144,6 +206,8 @@ private:
     std::ostringstream vars_decls_;
     std::ostringstream func_decls_;
     std::ostringstream func_impls_;
+    
+    TargetDetails& target_;
 };
 
 /*
@@ -246,6 +310,9 @@ std::string Emitter::convert_ret_pi(const Pi* pi) {
 void Emitter::start() {
     Super::start();
 
+    target_.write_default_decls(ostream());
+    ostream() << '\n';
+    
     ostream() << type_decls_.str() << '\n';
     for (auto&& decl : decls_) ostream() << decl << '\n';
     ostream() << func_decls_.str() << '\n';
@@ -270,7 +337,7 @@ void Emitter::emit_imported(Lam* lam) {
 std::string Emitter::prepare(const Scope& scope) {
     auto lam = scope.entry()->as_mut<Lam>();
 
-    print(func_impls_, "define {} {}(", convert_ret_pi(lam->type()->ret_pi()), id(lam));
+    print(func_impls_, "define {} {} {}(", target_.annotate_func(lam), convert_ret_pi(lam->type()->ret_pi()), id(lam));
 
     auto vars = lam->vars();
     for (auto sep = ""; auto var : vars.view().rsubspan(1)) {
@@ -845,7 +912,11 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         // TODO array with size
         // auto v_size = emit(mslot->arg(1));
         auto [pointee, addr_space] = mslot->decurry()->args<2>();
-        print(bb.body().emplace_back(), "{} = alloca {}", name, convert(pointee));
+        auto type = Lit::as(addr_space);
+        switch (type) {
+            case 3: print(bb.body().emplace_back(), "{} = alloca {} addrspace({})*", name, convert(pointee), addr_space); break;
+            default: print(bb.body().emplace_back(), "{} = alloca {}", name, convert(pointee)); 
+        }
         return name;
     } else if (auto free = match<mem::free>(def)) {
         declare("void @free(i8*)");
@@ -1058,15 +1129,54 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         f += llvm_suffix(round->type());
         declare("{} @{}({})", t, f, t);
         return bb.assign(name, "tail call {} @{}({} {})", t, f, t, a);
+    } else if (auto intrinsic = target_.emit_intrinsic(def); !intrinsic.empty()) {
+        return bb.assign(name, intrinsic.c_str());
+    } else if (auto dyn = match<core::get_dynamic_local_memory>(def)){
+
+        declare("ptr addrspace(3) @__hipsycl_sscp_get_dynamic_local_memory() local_unnamed_addr");
+        return bb.assign(name, "tail call ptr addrspace(3) @__hipsycl_sscp_get_dynamic_local_memory()");
+
+    } else if (auto addrcast = match<mem::addrspacecast>(def)){
+
+        auto [s_ptr, addrspace_s]  = addrcast->args<2>();
+        auto s_ptr_val     = emit(s_ptr);
+        auto addrspace_t   = force<mem::Ptr>(s_ptr->type())->arg(1);
+
+        return bb.assign(name, "addrspacecast ptr addrspace({}) {} to ptr", Lit::as(addrspace_t), s_ptr_val);
+
+    } else if (auto addrspacecast_and_lea = match<mem::addrspacecast_and_lea>(def)){
+
+        auto [s_ptr, addrspace_t, index]  = addrspacecast_and_lea->args<3>();
+        auto s_ptr_val     = emit(s_ptr);
+        auto s_ptr_type     = convert(s_ptr->type());
+        auto t_ptr_type    = convert(addrspacecast_and_lea->type());
+        auto as   = force<mem::Ptr>(s_ptr->type())->arg(1);
+
+        bb.assign(name + ".cast", "addrspacecast ptr addrspace({}) {} to ptr", Lit::as(as), s_ptr_val);
+
+        auto pointee   = force<mem::Ptr>(s_ptr->type())->arg(0);
+        auto t_pointee = convert(pointee);
+
+        assert(pointee->isa<Arr>());
+        auto [v_i, t_i] = emit_gep_index(index);
+
+        return bb.assign(name, "getelementptr inbounds {}, {} {}, i64 0, {} {}", t_pointee, s_ptr_type, name + ".cast", t_i, v_i);
+
     }
     error("unhandled def in LLVM backend: {} : {}", def, def->type());
 }
 
-void emit(World& world, std::ostream& ostream) {
-    Emitter emitter(world, ostream);
-    emitter.run();
+void emit_gpu(World& world, std::ostream& ostream) {
+    GPUTargetDetails gpu;
+    Emitter gpu_emitter(world, gpu, ostream);
+    gpu_emitter.run();
 }
 
+void emit_cpu(World& world, std::ostream& ostream) {
+    CPUTargetDetails cpu;
+    Emitter cpu_emitter(world, cpu, ostream);
+    cpu_emitter.run();
+}
 int compile(World& world, std::string name) {
 #ifdef _WIN32
     auto exe = name + ".exe"s;
@@ -1078,7 +1188,7 @@ int compile(World& world, std::string name) {
 
 int compile(World& world, std::string ll, std::string out) {
     std::ofstream ofs(ll);
-    emit(world, ofs);
+    emit_cpu(world, ofs);
     ofs.close();
     auto cmd = fmt("clang \"{}\" -o \"{}\" -Wno-override-module", ll, out);
     return sys::system(cmd);
