@@ -1,10 +1,10 @@
 // RUN: rm -f %t.ll runner %t.hsaco; \
-// RUN: %thorin %s --output-ll %t.ll
+// RUN: %thorin %s --output-ll-gpu %t.ll
 
 .plugin core;
 .plugin mem;
 
-.con kernel [mem : %mem.M, arg : %mem.Ptr (<<⊤:.Nat; (%core.I8)>>, 0:.Nat), exit : .Cn [%mem.M]] = {
+.con .extern kernel [mem : %mem.M, arg : %mem.Ptr (<<⊤:.Nat; (%core.I8)>>, 0:.Nat), exit : .Cn [%mem.M]] = {
     .let group_offset = %core.wrap.mul 0 (%core.group_id (0, 0), %core.group_size (0, 0));
     .let global_id = %core.wrap.add 0 (%core.local_id (0, 0), group_offset);
     .let lea = %mem.lea (⊤:.Nat, <⊤:.Nat; (.Idx 256)>, 0:.Nat) (arg, global_id);
@@ -12,9 +12,4 @@
     .let inc = %core.wrap.add 0 (val, val);
     .let smem = %mem.store (lmem, lea, inc);
     exit smem
-};
-
-.con .extern main [mem : %mem.M, argc : %core.I32, argv : %mem.Ptr («⊤:.Nat; %mem.Ptr («⊤:.Nat; %core.I8», 0)», 0), return : .Cn [%mem.M, %core.I32]] = {
-    .let gpu_mem = %core.gpu (4294967296, %mem.Ptr («⊤:.Nat; %core.I8», 0)) (mem, 1:%core.I32, 16:%core.I32, kernel);
-    return (gpu_mem, argc)
 };

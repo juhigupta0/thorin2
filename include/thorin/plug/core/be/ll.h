@@ -8,7 +8,8 @@ class World;
 
 namespace ll {
 
-void emit(World&, std::ostream&);
+void emit_cpu(World&, std::ostream&);
+void emit_gpu(World&, std::ostream&);
 
 int compile(World&, std::string name);
 int compile(World&, std::string ll, std::string out);

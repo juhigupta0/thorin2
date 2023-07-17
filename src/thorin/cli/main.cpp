@@ -22,7 +22,7 @@ using namespace thorin;
 using namespace std::literals;
 
 int main(int argc, char** argv) {
-    enum Backends { D, Dot, H, LL, Md, Thorin, Num_Backends };
+    enum Backends { D, Dot, H, LL_CPU, LL_GPU, Md, Thorin, Num_Backends };
 
     try {
         static const auto version = "thorin command-line utility version " THORIN_VER "\n";
@@ -173,11 +173,18 @@ int main(int argc, char** argv) {
         if (os[Thorin]) world.dump(*os[Thorin]);
         if (os[Dot]) world.dot(*os[Dot], dot_all_annexes, dot_follow_types);
 
-        if (os[LL]) {
-            if (auto backend = driver.backend("ll"))
-                backend(world, *os[LL]);
+        if (os[LL_CPU]) {
+            if (auto backend = driver.backend("ll_cpu"))
+                backend(world, *os[LL_CPU]);
             else
-                error("'ll' emitter not loaded; try loading 'mem' plugin");
+                error("'ll_cpu' emitter not loaded; try loading 'mem' plugin");
+        }
+        
+        if (os[LL_GPU]) {
+            if (auto backend = driver.backend("ll_gpu"))
+                backend(world, *os[LL_GPU]);
+            else
+                error("'ll_gpu' emitter not loaded; try loading 'mem' plugin");
         }
     } catch (const std::exception& e) {
         errln("{}", e.what());

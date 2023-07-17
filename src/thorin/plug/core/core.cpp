@@ -11,7 +11,7 @@ using namespace thorin::plug;
 
 extern "C" THORIN_EXPORT Plugin thorin_get_plugin() {
     return {"core", [](Normalizers& normalizers) { core::register_normalizers(normalizers); }, nullptr,
-            [](Backends& backends) { backends["ll"] = &ll::emit; }};
+            [](Backends& backends) { backends["ll_cpu"] = &ll::emit_cpu; backends["ll_gpu"] = &ll::emit_gpu; }};
 }
 
 namespace thorin::plug::core {
