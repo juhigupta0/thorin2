@@ -168,10 +168,10 @@ inline Ref op_malloc(Ref type, Ref mem) {
 
 /// @name %%mem.mslot
 ///@{
-inline Ref op_mslot(Ref type, Ref mem, Ref id) {
+inline Ref op_mslot(Ref type, Ref addr_space, Ref mem, Ref id) {
     World& w  = type->world();
     auto size = w.call(core::trait::size, type);
-    return w.app(w.app(w.annex<mslot>(), {type, w.lit_nat_0()}), {mem, size, id});
+    return w.app(w.app(w.annex<mslot>(), {type, addr_space}), {mem, size, id});
 }
 ///@}
 

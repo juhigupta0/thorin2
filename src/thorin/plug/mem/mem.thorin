@@ -72,6 +72,11 @@
 /// `id` has to be provided an unique id.
 .ax %mem.mslot: Π Tas::[*, .Nat][%mem.M, size: .Nat, id: .Nat] -> [%mem.M, %mem.Ptr Tas];
 ///
+/// ### %mem.addrspacecast
+///
+.ax %mem.addrspacecast: Π.[T: *, as: .Nat][%mem.Ptr(T, as), addrspace_t: .Nat] -> %mem.Ptr(«⊤:.Nat; T», addrspace_t);
+.ax %mem.addrspacecast_and_lea: Π [n: .Nat, Ts: «n; *», as: .Nat][%mem.Ptr(«j: n; Ts#j», as), addrspace_t: .Nat, index: .Idx n] -> %mem.Ptr(«j: n; Ts#j», addrspace_t);
+//
 /// ## Operations w/o Side Effects
 ///
 /// ### %mem.lea

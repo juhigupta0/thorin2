@@ -11,7 +11,7 @@ Ref Alloc2Malloc::rewrite(Ref def) {
     } else if (auto slot = match<mem::slot>(def)) {
         auto [pointee, addr_space] = slot->decurry()->args<2>();
         auto [mem, id]             = slot->args<2>();
-        return op_mslot(pointee, mem, id);
+        return op_mslot(pointee, addr_space, mem, id);
     }
 
     return def;
