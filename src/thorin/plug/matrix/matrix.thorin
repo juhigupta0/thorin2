@@ -79,9 +79,24 @@
 // TODO: define alias: * fst, snd, split * zip = zipWith id
 .ax %matrix.prod:  Π [m: .Nat, k: .Nat, l: .Nat, [p: .Nat, e:.Nat]] ->
     [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(k, l),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, l),%math.F (p,e))], normalize_prod;
+.ax %matrix.addition:  Π [m: .Nat, k: .Nat, [p: .Nat, e:.Nat]] ->
+    [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(m, k),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e))];
+.ax %matrix.sum: Π [n: .Nat, S: «n; .Nat», [p:.Nat,e:.Nat]] -> [%mem.M,%matrix.Mat (n,S,%math.F (p,e))] -> [%mem.M,%math.F (p,e)];
 .ax %matrix.transpose: Π [[k:.Nat, l:.Nat], T: *] ->
     [%mem.M,%matrix.Mat (2,(k,l),T)] -> [%mem.M,%matrix.Mat (2,(l,k),T)], normalize_transpose;
-.ax %matrix.sum: Π [n: .Nat, S: «n; .Nat», [p:.Nat,e:.Nat]] -> [%mem.M,%matrix.Mat (n,S,%math.F (p,e))] -> [%mem.M,%math.F (p,e)];
+///
+/// ### High-level matrix operations for GPU
+///
+/// Matrix multiplication: O = M X N
+.ax %matrix.multiplication_gpu:  Π [m: .Nat, k: .Nat, l: .Nat, [p: .Nat, e:.Nat]] ->
+    [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(k, l),%math.F (p,e)), %matrix.Mat (2,(m, l),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, l),%math.F (p,e))];
+/// Matrix addition: O = M + N
+.ax %matrix.addition_gpu:  Π [m: .Nat, k: .Nat, [p: .Nat, e:.Nat]] ->
+    [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(m, k),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e))];
+/// Matrix fused Addition & multiplication: O = (A + B) X O
+.ax %matrix.add_multiply_gpu:  Π [m: .Nat, [p: .Nat, e:.Nat]] ->
+    [%mem.M,%matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, m),%math.F (p,e))];   
+    
 ///
 // TODO: handle reduction case: n=0, S=[] => not empty but scalar
 /// Our notation is inspired by einsum (with some generalizations):
@@ -130,6 +145,27 @@
         input:  «i: m; [«NI#i; .Nat», %matrix.Mat (NI#i, SI#i, TI#i)]»
     ] -> [%mem.M, %matrix.Mat (n, S, T)],
     normalize_map_reduce;
+
+// Map-Reduce operation for GPU    
+.ax %matrix.parallel_map_reduce:
+    // out shape depends on in shape but is complex
+    Π [
+        n: .Nat, S: «n; .Nat», T: *, // out shape
+        m: .Nat,                     // number of inputs
+        NI: «m; .Nat»,               // input dimensions
+        TI: «m; *»,                  // input types
+        SI: «i:m; «NI#i; .Nat»»      // input shapes
+    ][
+        mem:    %mem.M,              // memory
+        zero:   T,                   // initial value
+        // TODO: propagate change: no addition but instead take acc as argument (like mlir.linarith.generic)
+        comb:   .Fn [%mem.M, T, «i: m; TI#i»] -> [%mem.M, T], // inner combination
+        // out_index not needed => always ij (0 ... n) for n dimensions
+        input:  «i: m; [«NI#i; .Nat», %matrix.Mat (NI#i, SI#i, TI#i)]»,
+        O:      %matrix.Mat (n, S, T),
+        local_idxs: «2; .Idx 4294967296»,
+        group_size_idxs: «2; .Idx 4294967296»
+    ] -> [%mem.M, %matrix.Mat (n, S, T)];
 ///
 /// ## Unfolding functions
 ///
@@ -161,6 +197,161 @@
                 )
             )
     );
+///
+/// GPU External function Matrix multiplication: O = M x N
+///
+.fun .extern internal_mapRed_matrix_multiplication_gpu!(m k l: .Nat, pe: «2; .Nat»)
+                                        !(mem: %mem.M, M: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       N: %matrix.Mat (2, (k, l), %math.F pe),
+                                                       O: %matrix.Mat (2, (m, l), %math.F pe))
+                                        :[     %mem.M,    %matrix.Mat (2, (m, l), %math.F pe)] =
+    .let R = %math.F pe;
+    .let zero_real = %math.conv.f2f pe 0.0:%math.F64;
+    .let local_idx_0 = %core.local_id(1, 0);
+    .let `local_idx_0 = %core.conv.u 4294967296 local_idx_0;
+    .let local_idx_1 = %core.local_id(0, 0);
+    .let `local_idx_1 = %core.conv.u 4294967296 local_idx_1;
+    .let group_size_0 = %core.group_size(1, 0);
+    .let `group_size_0 = %core.conv.u 4294967296 group_size_0;
+    .let group_size_1 = %core.group_size(0, 0);
+    .let `group_size_1 = %core.conv.u 4294967296 group_size_1;
+
+    return (
+        %matrix.parallel_map_reduce
+            (2, (m, l), R,
+                2,
+                (2, 2),
+                (R, R),
+                ((m, k), (k, l))
+            )
+            (
+                mem,
+                zero_real,
+                .fn (mem: %mem.M, acc: R, ab: «2; R»): [%mem.M, R] =
+                    return (mem, %math.arith.add 0 (acc, %math.arith.mul 0 ab)),
+                (
+                    ((0, 2), M),
+                    ((2, 1), N)
+                ),
+                O,
+                (local_idx_0, local_idx_1),
+                (group_size_0, group_size_1),
+            )
+    );
+///    
+/// ### Element-wise Addition
+///
+.fun .extern internal_mapRed_matrix_addition!(m k: .Nat, pe: «2; .Nat»)
+                                        !(mem: %mem.M, M: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       N: %matrix.Mat (2, (m, k), %math.F pe))
+                                        :[     %mem.M,    %matrix.Mat (2, (m, k), %math.F pe)] =
+    .let R = %math.F pe;
+    .let zero_real = %math.conv.f2f pe 0.0:%math.F64;
+    return (
+        %matrix.map_reduce
+            (2, (m, k), R,
+                2,
+                (2, 2),
+                (R, R),
+                ((m, k), (m, k))
+            )
+            (
+                mem,
+                zero_real,
+                .fn (mem: %mem.M, acc: R, ab: «2; R»): [%mem.M, R] =
+                    return (mem, %math.arith.add 0 (ab)),
+                (
+                    ((0, 1), M),
+                    ((0, 1), N)
+                )
+            )
+    );
+///
+/// GPU External function Matrix addition: O = M + N
+///
+.fun .extern internal_mapRed_matrix_addition_gpu!(m k: .Nat, pe: «2; .Nat»)
+                                        !(mem: %mem.M, M: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       N: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       O: %matrix.Mat (2, (m, k), %math.F pe))
+                                        :[     %mem.M,    %matrix.Mat (2, (m, k), %math.F pe)] =
+    .let R = %math.F pe;
+    .let zero_real = %math.conv.f2f pe 0.0:%math.F64;
+    .let local_idx_0 = %core.local_id(1, 0);
+    .let `local_idx_0 = %core.conv.u 4294967296 local_idx_0;
+    .let local_idx_1 = %core.local_id(0, 0);
+    .let `local_idx_1 = %core.conv.u 4294967296 local_idx_1;
+    .let group_size_0 = %core.group_size(1, 0);
+    .let `group_size_0 = %core.conv.u 4294967296 group_size_0;
+    .let group_size_1 = %core.group_size(0, 0);
+    .let `group_size_1 = %core.conv.u 4294967296 group_size_1;
+
+    return (
+        %matrix.parallel_map_reduce
+            (2, (m, k), R,
+                2,
+                (2, 2),
+                (R, R),
+                ((m, k), (m, k))
+            )
+            (
+                mem,
+                zero_real,
+                .fn (mem: %mem.M, acc: R, ab: «2; R»): [%mem.M, R] =
+                    return (mem, %math.arith.add 0 (ab)),
+                (
+                    ((0, 1), M),
+                    ((0, 1), N)
+                ),
+                O,
+                (local_idx_0, local_idx_1),
+                (group_size_0, group_size_1),
+            )
+    );
+///
+/// GPU External function for Matrix fused Addition & multiplication: O = (A + B) X C
+///
+.fun .extern internal_mapRed_matrix_add_multiply_gpu!(m: .Nat, pe: «2; .Nat»)
+    !(mem: %mem.M, A: %matrix.Mat (2, (m, m), %math.F pe),
+                   B: %matrix.Mat (2, (m, m), %math.F pe),
+                   C: %matrix.Mat (2, (m, m), %math.F pe),
+                   O: %matrix.Mat (2, (m, m), %math.F pe))
+    :[     %mem.M,    %matrix.Mat (2, (m, m), %math.F pe)] =
+    
+    .let R = %math.F pe;
+    .let zero_real = %math.conv.f2f pe 0.0:%math.F64;
+    .let local_idx_0 = %core.local_id(1, 0);
+    .let `local_idx_0 = %core.conv.u 4294967296 local_idx_0;
+    .let local_idx_1 = %core.local_id(0, 0);
+    .let `local_idx_1 = %core.conv.u 4294967296 local_idx_1;
+    .let group_size_0 = %core.group_size(1, 0);
+    .let `group_size_0 = %core.conv.u 4294967296 group_size_0;
+    .let group_size_1 = %core.group_size(0, 0);
+    .let `group_size_1 = %core.conv.u 4294967296 group_size_1;
+
+    return (
+        %matrix.parallel_map_reduce
+            (2, (m, m), R,
+                3, // Three matrices to consider: A, B, and C
+                (2, 2, 2), // dimensions of A, B, and C
+                (R, R, R), // types of A, B, and C
+                ((m, m), (m, m), (m, m)) // shapes of A, B, and C
+            )
+            (
+                mem,
+                zero_real,
+                .fn (mem: %mem.M, acc: R, [a:R, b:R, c:R]): [%mem.M, R] =
+                    return (mem, %math.arith.add 0 (acc, %math.arith.mul 0 ((%math.arith.add 0 (a, b)), c))),
+                (
+                    ((0, 2), A),
+                    ((0, 2), B),
+                    ((2, 1), C)
+                ),
+                O, // Output Martix
+                (local_idx_0, local_idx_1),
+                (group_size_0, group_size_1),
+            )
+    );
+
 ///
 /// ### transpose
 ///
