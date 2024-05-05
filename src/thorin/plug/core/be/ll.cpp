@@ -1131,6 +1131,12 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         return bb.assign(name, "tail call {} @{}({} {})", t, f, t, a);
     } else if (auto intrinsic = target_.emit_intrinsic(def); !intrinsic.empty()) {
         return bb.assign(name, intrinsic.c_str());
+    } else if(auto barrier = match<core::work_group_barrier>(def)) {
+
+        declare("void @__hipsycl_sscp_work_group_barrier(i32 noundef, i32 noundef) local_unnamed_addr");
+        bb.tail("tail call void @__hipsycl_sscp_work_group_barrier(i32 noundef 3, i32 noundef 4)");
+        return {};
+
     } else if (auto dyn = match<core::get_dynamic_local_memory>(def)){
 
         declare("ptr addrspace(3) @__hipsycl_sscp_get_dynamic_local_memory() local_unnamed_addr");

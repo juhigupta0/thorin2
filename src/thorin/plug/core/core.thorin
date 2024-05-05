@@ -296,3 +296,5 @@
 .lam %core.global_id (dim : .Nat, idx_size: .Nat): .Idx idx_size = %core.wrap.add %core.mode.nsw (%core.local_id (dim, idx_size), %core.wrap.mul %core.mode.nsw (%core.group_size (dim, idx_size), %core.group_id (dim, idx_size)));
 
 .ax %core.get_dynamic_local_memory: Π [n: .Nat, Ts: «n; *», as: .Nat] -> %mem.Ptr(«j: n; Ts#j», as);
+
+.ax %core.work_group_barrier: Π [%mem.M] -> %mem.M;
