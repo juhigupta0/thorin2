@@ -1,0 +1,102 @@
+// RUN: %thorin %s --output-ll-gpu %t.ll
+
+.plugin core;
+.plugin math;
+.plugin matrix;
+
+.let Top = ⊤:.Nat;
+.let dim = 256;
+
+.con .extern MatrixFusedAddKernel [
+    mem : %mem.M,
+    mat_size    : .Idx %core.i32,
+    A           : %matrix.Mat (2, (dim, dim), %math.F64),
+    A_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    A_i         : .Idx %core.i32,
+    x           : .Idx %core.i64,
+    B           : %matrix.Mat (2, (dim, dim), %math.F64),
+    B_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    B_i         : .Idx %core.i32,
+    y           : .Idx %core.i64,
+    C           : %matrix.Mat (2, (dim, dim), %math.F64),
+    C_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    C_i         : .Idx %core.i32,
+    z           : .Idx %core.i64,
+    R           : %matrix.Mat (2, (dim, dim), %math.F64),
+    R_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    R_i         : .Idx %core.i32,
+    r           : .Idx %core.i64,
+    return : .Cn [%mem.M] 
+] = {
+
+    // R = (A + B) x C
+    .let (`mem, `R) = %matrix.fused_addition_gpu (dim, dim, %math.f64) (mem, A, B, C, R);
+
+    return (mem)
+};
+
+
+.con .extern MatrixAddAddKernel_with_intermediate_that_is_fused [
+    mem : %mem.M,
+    mat_size    : .Idx %core.i32,
+    A           : %matrix.Mat (2, (dim, dim), %math.F64),
+    A_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    A_i         : .Idx %core.i32,
+    x           : .Idx %core.i64,
+    B           : %matrix.Mat (2, (dim, dim), %math.F64),
+    B_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    B_i         : .Idx %core.i32,
+    y           : .Idx %core.i64,
+    C           : %matrix.Mat (2, (dim, dim), %math.F64),
+    C_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    C_i         : .Idx %core.i32,
+    z           : .Idx %core.i64,
+    I           : %matrix.Mat (2, (dim, dim), %math.F64),
+    I_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    I_i         : .Idx %core.i32,
+    i           : .Idx %core.i64,
+    R           : %matrix.Mat (2, (dim, dim), %math.F64),
+    R_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    R_i         : .Idx %core.i32,
+    r           : .Idx %core.i64,
+    return : .Cn [%mem.M] 
+] = {
+
+    .let (`mem, Inter) = %matrix.addition_gpu (dim, dim, %math.f64) (mem, A, B, I);
+    .let (`mem, `R) = %matrix.addition_gpu (dim, dim, %math.f64) (mem, I, C, R);
+
+    return (mem)
+};
+
+
+.con .extern MatrixAddAddKernel_with_intermediate [
+    mem : %mem.M,
+    mat_size    : .Idx %core.i32,
+    A           : %matrix.Mat (2, (dim, dim), %math.F64),
+    A_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    A_i         : .Idx %core.i32,
+    x           : .Idx %core.i64,
+    B           : %matrix.Mat (2, (dim, dim), %math.F64),
+    B_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    B_i         : .Idx %core.i32,
+    y           : .Idx %core.i64,
+    C           : %matrix.Mat (2, (dim, dim), %math.F64),
+    C_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    C_i         : .Idx %core.i32,
+    z           : .Idx %core.i64,
+    I           : %matrix.Mat (2, (dim, dim), %math.F64),
+    I_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    I_i         : .Idx %core.i32,
+    i           : .Idx %core.i64,
+    R           : %matrix.Mat (2, (dim, dim), %math.F64),
+    R_p         : %mem.Ptr (<<Top; (.Idx %core.i32 )>>, 0),
+    R_i         : .Idx %core.i32,
+    r           : .Idx %core.i64,
+    return : .Cn [%mem.M] 
+] = {
+
+    .let (`mem, Inter) = %matrix.addition_gpu (dim, dim, %math.f64) (mem, A, B, I);
+    .let (`mem, `R) = %matrix.addition_gpu (dim, dim, %math.f64) (mem, Inter, C, R);
+
+    return (mem)
+};

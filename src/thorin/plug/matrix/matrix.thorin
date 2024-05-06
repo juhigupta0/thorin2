@@ -93,6 +93,15 @@
 /// Matrix addition: O = M + N
 .ax %matrix.addition_gpu:  Π [m: .Nat, k: .Nat, [p: .Nat, e:.Nat]] ->
     [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(m, k),%math.F (p,e)), %matrix.Mat (2,(m, k),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, k),%math.F (p,e))];
+/// Matrix addition fused: O = K + M + N
+.ax %matrix.fused_addition_gpu:  Π [m: .Nat, k: .Nat, [p: .Nat, e:.Nat]] ->
+    [%mem.M,
+        %matrix.Mat (2,(m, k),%math.F (p,e)),
+        %matrix.Mat (2,(m, k),%math.F (p,e)),
+        %matrix.Mat (2,(m, k),%math.F (p,e)),
+        %matrix.Mat (2,(m, k),%math.F (p,e))] ->
+    [%mem.M,
+        %matrix.Mat (2,(m, k),%math.F (p,e))];
 /// Matrix fused Addition & multiplication: O = (A + B) X O
 .ax %matrix.add_multiply_gpu:  Π [m: .Nat, [p: .Nat, e:.Nat]] ->
     [%mem.M,%matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e)), %matrix.Mat (2,(m, m),%math.F (p,e))] -> [%mem.M,%matrix.Mat (2,(m, m),%math.F (p,e))];   
@@ -299,6 +308,50 @@
                 .fn (mem: %mem.M, acc: R, ab: «2; R»): [%mem.M, R] =
                     return (mem, %math.arith.add 0 (ab)),
                 (
+                    ((0, 1), M),
+                    ((0, 1), N)
+                ),
+                O,
+                (local_idx_0, local_idx_1),
+                (group_size_0, group_size_1),
+            )
+    );
+
+///
+/// GPU External function fused Matrix addition: O = K+ M + N
+///
+.fun .extern internal_mapRed_matrix_fused_addition_gpu!(m k: .Nat, pe: «2; .Nat»)
+                                        !(mem: %mem.M, K: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       M: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       N: %matrix.Mat (2, (m, k), %math.F pe),
+                                                       O: %matrix.Mat (2, (m, k), %math.F pe))
+                                        :[     %mem.M,    %matrix.Mat (2, (m, k), %math.F pe)] =
+    .let R = %math.F pe;
+    .let zero_real = %math.conv.f2f pe 0.0:%math.F64;
+    .let local_idx_0 = %core.local_id(1, 0);
+    .let `local_idx_0 = %core.conv.u 4294967296 local_idx_0;
+    .let local_idx_1 = %core.local_id(0, 0);
+    .let `local_idx_1 = %core.conv.u 4294967296 local_idx_1;
+    .let group_size_0 = %core.group_size(1, 0);
+    .let `group_size_0 = %core.conv.u 4294967296 group_size_0;
+    .let group_size_1 = %core.group_size(0, 0);
+    .let `group_size_1 = %core.conv.u 4294967296 group_size_1;
+
+    return (
+        %matrix.parallel_map_reduce
+            (2, (m, k), R,
+                3,
+                (2, 2, 2),
+                (R, R, R),
+                ((m, k), (m, k), (m, k))
+            )
+            (
+                mem,
+                zero_real,
+                .fn (mem: %mem.M, acc: R, [a:R, b:R, c:R]): [%mem.M, R] =
+                    return (mem, %math.arith.add 0 (%math.arith.add 0 (a, b), c)),
+                (
+                    ((0, 1), K),
                     ((0, 1), M),
                     ((0, 1), N)
                 ),
